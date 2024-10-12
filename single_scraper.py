@@ -1,6 +1,7 @@
 import json
 import csv
 import re  # Added import for regular expressions
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -22,6 +23,31 @@ def parse_numeric_value(text):
             return int(text)
     except:
         return None
+
+def format_examples(examples):
+    """
+    Converts extracted examples into the desired structured format with 'input', 'output', and 'explanation'.
+    """
+    formatted_examples = []
+    for example in examples:
+        # Split the example based on known structure (Input, Output, and Explanation parts)
+        input_match = re.search(r"Input:\s*(.*?)\s*(Output:|$)", example, re.DOTALL)
+        output_match = re.search(r"Output:\s*(.*?)\s*(Explanation:|$)", example, re.DOTALL)
+        explanation_match = re.search(r"Explanation:\s*(.*)", example, re.DOTALL)
+
+        # Extract and strip the text for input, output, and explanation
+        input_example = input_match.group(1).strip() if input_match else ''
+        output_example = output_match.group(1).strip() if output_match else ''
+        explanation_example = explanation_match.group(1).strip() if explanation_match else ''
+
+        formatted_example = {
+            'input': input_example,
+            'output': output_example,
+            'explanation': explanation_example
+        }
+        formatted_examples.append(formatted_example)
+
+    return formatted_examples
 
 def extract_problem_data(driver, problem_url):
     # Navigate to the problem page
@@ -67,75 +93,78 @@ def extract_problem_data(driver, problem_url):
         print(f"Error extracting acceptance rate from {problem_url}: {e}")
         problem_data['acceptance'] = None
 
-    # Extract Likes and Dislikes
-    try:
-        # Likes
-        likes_element = driver.find_element(
-            By.XPATH, "//button[@aria-label='like']//div[contains(@class, 'counter')]"
-        )
-        likes_text = likes_element.text.strip()
-        problem_data['likes'] = parse_numeric_value(likes_text)
-
-        # Dislikes
-        dislikes_element = driver.find_element(
-            By.XPATH, "//button[@aria-label='dislike']//div[contains(@class, 'counter')]"
-        )
-        dislikes_text = dislikes_element.text.strip()
-        problem_data['dislikes'] = parse_numeric_value(dislikes_text)
-    except Exception as e:
-        print(f"Error extracting likes/dislikes from {problem_url}: {e}")
-        problem_data['likes'] = problem_data['dislikes'] = None
-
-    # Extract Description
+    # Extract Description, Examples, and Constraints
     try:
         description_element = driver.find_element(
             By.XPATH, "//div[@data-track-load='description_content']"
         )
-        problem_data['description'] = description_element.text.strip()
+        description_text = description_element.text.strip()
     except Exception as e:
         print(f"Error extracting description from {problem_url}: {e}")
-        description_element = None
-        problem_data['description'] = None
+        description_text = ''
 
     # Extract Examples and Constraints from the description
     try:
-        if description_element:
-            description_html = description_element.get_attribute('innerHTML')
-
+        if description_text:
             # Use regular expressions to extract examples and constraints
             examples = []
             constraints = []
 
-            # Extract examples
-            example_matches = re.findall(
-                r'<strong[^>]*class="[^"]*example[^"]*"[^>]*>Example.*?</pre>',
-                description_html,
-                re.DOTALL | re.IGNORECASE
-            )
-            for match in example_matches:
-                example_text = re.sub(r'<.*?>', '', match)  # Remove HTML tags
-                examples.append(example_text.strip())
+            # Extract examples from description_text
+            # Regex to find "Example X:" followed by content
+            example_pattern = r'(Example \d+:.*?)(?=Example \d+:|Constraints:|$)'
+            example_matches = re.findall(example_pattern, description_text, re.DOTALL)
 
-            # Extract constraints
-            constraints_match = re.search(
-                r'<strong[^>]*>Constraints:</strong>(.*?)</ul>',
-                description_html,
-                re.DOTALL | re.IGNORECASE
-            )
+            # Remove examples from description_text
+            description_text_no_examples = re.sub(example_pattern, '', description_text, flags=re.DOTALL).strip()
+
+            # Now extract constraints from description_text_no_examples
+            constraints_pattern = r'Constraints:\s*(.*)'
+            constraints_match = re.search(constraints_pattern, description_text_no_examples, re.DOTALL)
+
             if constraints_match:
-                constraints_html = constraints_match.group(1)
-                constraint_items = re.findall(r'<li>(.*?)</li>', constraints_html)
-                constraints = [re.sub(r'<.*?>', '', item).strip() for item in constraint_items]
-                problem_data['constraints'] = constraints
+                constraints_text = constraints_match.group(1).strip()
+                # Remove constraints from description
+                description_text_clean = re.sub(constraints_pattern, '', description_text_no_examples, flags=re.DOTALL).strip()
+                # Now process constraints_text to extract individual constraints
+                constraints_list = constraints_text.split('\n')
+                constraints_list = [constraint.strip() for constraint in constraints_list if constraint.strip()]
+                problem_data['constraints'] = constraints_list
             else:
+                description_text_clean = description_text_no_examples
                 problem_data['constraints'] = []
 
-            problem_data['examples'] = examples
+            # Assign cleaned description to problem_data['description']
+            problem_data['description'] = description_text_clean
+
+            # Process examples to desired format
+            formatted_examples = []
+            for example_text in example_matches:
+                # Use regex to extract input, output, explanation
+                input_match = re.search(r'Input:\s*(.*?)\s*(Output:|$)', example_text, re.DOTALL)
+                output_match = re.search(r'Output:\s*(.*?)\s*(Explanation:|$)', example_text, re.DOTALL)
+                explanation_match = re.search(r'Explanation:\s*(.*)', example_text, re.DOTALL)
+
+                # Extract and strip the text for input, output, and explanation
+                input_example = input_match.group(1).strip() if input_match else ''
+                output_example = output_match.group(1).strip() if output_match else ''
+                explanation_example = explanation_match.group(1).strip() if explanation_match else ''
+
+                formatted_example = {
+                    'input': input_example,
+                    'output': output_example,
+                    'explanation': explanation_example
+                }
+                formatted_examples.append(formatted_example)
+
+            problem_data['examples'] = formatted_examples
         else:
+            problem_data['description'] = ''
             problem_data['examples'] = []
             problem_data['constraints'] = []
     except Exception as e:
         print(f"Error extracting examples and constraints from {problem_url}: {e}")
+        problem_data['description'] = ''
         problem_data['examples'] = []
         problem_data['constraints'] = []
 
@@ -155,13 +184,7 @@ def extract_problem_data(driver, problem_url):
         print(f"Error extracting topics from {problem_url}: {e}")
         problem_data['topics'] = []
 
-    # Extract Similar Questions
-    try:
-        similar_questions = extract_similar_questions(driver)
-        problem_data['similarQuestions'] = similar_questions
-    except Exception as e:
-        print(f"Error extracting similar questions from {problem_url}: {e}")
-        problem_data['similarQuestions'] = []
+
 
     # Print the extracted data before writing to CSV
     print(json.dumps(problem_data, indent=4, ensure_ascii=False))
@@ -171,30 +194,31 @@ def extract_problem_data(driver, problem_url):
 def extract_hints(driver):
     hints = []
     try:
-        # Find all hint labels and their parent with class 'flex-col'
+        # Find all hint labels
         hint_labels = driver.find_elements(
             By.XPATH, "//div[contains(@class, 'text-body') and starts-with(text(), 'Hint')]"
         )
         
         for label in hint_labels:
             try:
-                print(label.text.strip())
-                # Get the parent div with class 'flex-col'
-                parent_div = label.find_element(By.XPATH, "./ancestor::div[8]")
-                print("found",parent_div)
-                child_divs = parent_div.find_elements(By.XPATH, ".//div")
+                label.click()
+                time.sleep(2)  
 
-                # Print the number of child div elements
-                print(f"Number of child divs in parent div: {len(child_divs)}")
-                # Now get the text from the sibling div with class 'text-body'
-                hint_content_div = parent_div.find_elements(
-                    By.XPATH, ".//div[contains(@class, 'text-body') and contains(@class, 'text-sd-foreground')]"
+                parent_div = label.find_element(By.XPATH, "./ancestor::div[5]")
+
+                hint_content_divs = parent_div.find_elements(
+                    By.XPATH, ".//div[contains(@class, 'text-sd-foreground') and normalize-space(text())]"
                 )
-                for hint in hint_content_div:
-                    print(hint)
-                    hint_content=hint.text.strip()
-                    
-                    hints.append(hint_content)
+
+                for child_div in hint_content_divs:
+                    div_text = child_div.text.strip()
+
+                    if re.match(r"Hint \d+", div_text):
+                        continue
+
+                    if div_text:
+                        hints.append(div_text)
+
             except Exception as e:
                 print(f"Error extracting hint content: {e}")
                 hints.append(None)
@@ -212,6 +236,7 @@ def extract_similar_questions(driver):
         similar_questions_label = driver.find_element(
             By.XPATH, "//div[contains(@class, 'text-body') and text()='Similar Questions']"
         )
+        similar_questions_label.click()
         # Find all similar question links
         question_elements = similar_questions_label.find_elements(
             By.XPATH, "following-sibling::div//a"
@@ -257,29 +282,11 @@ def extract_topics(driver):
         print(f"Error extracting topics: {e}")
     return topics
 
-
-
-def save_to_csv(data_list, filename='problems.csv'):
-    # Define CSV columns
-    columns = ['id', 'title', 'difficulty', 'acceptance', 'likes', 'dislikes', 'description', 'examples', 'constraints', 'hints', 'topics', 'similarQuestions']
-
-    # Open CSV file for writing
-    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=columns)
-
-        # Write header
-        writer.writeheader()
-
-        for data in data_list:
-            # Convert lists/dicts to JSON strings
-            data['examples'] = json.dumps(data.get('examples', []), ensure_ascii=False)
-            data['constraints'] = json.dumps(data.get('constraints', []), ensure_ascii=False)
-            data['hints'] = json.dumps(data.get('hints', []), ensure_ascii=False)
-            data['topics'] = json.dumps(data.get('topics', []), ensure_ascii=False)
-            data['similarQuestions'] = json.dumps(data.get('similarQuestions', []), ensure_ascii=False)
-
-            writer.writerow(data)
-
+def save_to_json(data_list, filename='questions_new.json'):
+    # Open JSON file for writing
+    with open(filename, 'w', encoding='utf-8') as jsonfile:
+        # Save the entire data list as JSON
+        json.dump(data_list, jsonfile, ensure_ascii=False, indent=4)
 def main():
     # Set up options for headless browsing
     options = Options()
@@ -319,8 +326,8 @@ def main():
                 print(f"Failed to extract data from {url}")
 
         # Save the data to CSV
-        save_to_csv(all_problem_data)
-        print(f"\nData extraction complete. Saved to 'problems.csv'.")
+        save_to_json(all_problem_data)
+        print(f"\nData extraction complete. Saved to 'questions_new.json'.")
 
     except KeyboardInterrupt:
         print("\nScript interrupted by user. Exiting gracefully...")
